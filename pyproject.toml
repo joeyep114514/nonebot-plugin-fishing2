@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "nonebot-plugin-fishing2"
-version = "1.0.2"
+version = "1.0.3"
 description = "更好的电子钓鱼"
 authors = [
     {name = "Polaris_Light", email = "995905922@qq.com" },
@@ -17,6 +17,7 @@ dependencies = [
     "nonebot-plugin-localstore>=0.6.0",
     "sqlalchemy>=2.0.27",
     "nonebot-plugin-orm>=0.7.1",
+    "nonebot-plugin-value>=0.1.0",
 ]
 readme = "README.md"
 license = "MIT"
@@ -35,3 +36,4 @@ pydantic = ">=1.10"
 nonebot-plugin-localstore = ">=0.6.0"
 sqlalchemy = ">=2.0.27"
 nonebot-plugin-orm = ">=0.7.1"
+nonebot-plugin-value = ">=0.1.0"

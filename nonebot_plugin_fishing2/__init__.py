@@ -1,6 +1,7 @@
 from nonebot import require
 
 require("nonebot_plugin_orm")  # noqa
+require("nonebot_plugin_value")  # noqa
 
 import copy
 import shlex
@@ -42,6 +43,7 @@ from .data_source import (
     predict,
     get_pool,
     remove_special_fish,
+    init_currency,
 )
 from .fish_helper import fish_list, get_fish_by_name
 
@@ -80,6 +82,16 @@ __plugin_meta__ = PluginMetadata(
 )
 
 
+from nonebot import get_driver
+
+driver = get_driver()
+
+
+@driver.on_startup
+async def _init_currency():
+    await init_currency()
+
+
 block_user_list = []
 punish_user_dict = {}
 
@@ -101,6 +113,8 @@ give_cmd = on_command("give", aliases={"赐予"}, force_whitespace=True, priorit
 predict_cmd = on_command("predict", aliases={"钓鱼预测"}, force_whitespace=True, priority=5)
 pool_cmd = on_command("pool", aliases={"鱼池"}, force_whitespace=True, priority=5)
 remove_cmd = on_command("remove", aliases={"捞鱼"}, force_whitespace=True, priority=5)
+# test cmd
+test_value_api_cmd = on_command("test_value_api", aliases={"测试经济API"}, force_whitespace=True, priority=5)
 # fmt:on
 
 
@@ -599,3 +613,47 @@ async def get_at(event: Union[GroupMessageEvent, PrivateMessageEvent]) -> int:
             if msg_seg.type == "at":
                 return msg_seg.data["qq"]
     return None
+
+
+@test_value_api_cmd.handle()
+async def _(bot: Bot, event: Union[GroupMessageEvent, PrivateMessageEvent]):
+    user_id = event.get_user_id()
+    is_superuser = str(user_id) in bot.config.superusers
+    is_self = event.self_id == user_id
+    if not is_superuser and not is_self:
+        return None
+
+    try:
+        from nonebot_plugin_value.api.api_currency import list_currencies
+        from nonebot_plugin_value.api.api_balance import get_or_create_account, list_accounts
+        
+        # Test currency API
+        currencies = await list_currencies()
+        currency_names = [c.display_name for c in currencies]
+        
+        # Test if our currency exists
+        fishing_currency = None
+        for c in currencies:
+            if c.display_name == fishing_coin_name:
+                fishing_currency = c
+                break
+        currency_exists = fishing_currency is not None
+        
+        # Test balance API
+        test_user_id = "test_user_12345"
+        account = await get_or_create_account(test_user_id, fishing_currency.id if fishing_currency else None)
+        
+        # Test list accounts
+        accounts = await list_accounts(fishing_currency.id if fishing_currency else None)
+        
+        result = [
+            f"✅ 经济API测试结果:",
+            f"货币列表: {currency_names}",
+            f"钓鱼货币 '{fishing_coin_name}' 存在: {currency_exists}",
+            f"测试账户余额: {account.balance}",
+            f"账户总数: {len(accounts)}",
+            f"✅ 所有API测试通过!"
+        ]
+        await test_value_api_cmd.finish("\n".join(result))
+    except Exception as e:
+        await test_value_api_cmd.finish(f"❌ API测试失败: {str(e)}")

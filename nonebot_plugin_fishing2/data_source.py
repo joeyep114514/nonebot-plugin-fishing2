@@ -9,10 +9,110 @@ from sqlalchemy import select, update, delete
 from sqlalchemy.sql.expression import func
 from nonebot.adapters.onebot.v11 import MessageSegment
 from nonebot_plugin_orm import get_session
+from nonebot import require
+
+require("nonebot_plugin_value")
+from nonebot_plugin_value.api.api_balance import (
+    get_or_create_account as _get_or_create_account,
+    add_balance as _add_balance,
+    del_balance as _del_balance,
+    transfer_funds as _transfer_funds,
+)
+from nonebot_plugin_value.api.api_currency import (
+    get_or_create_currency as _get_or_create_currency,
+    get_currency as _get_currency,
+)
 
 from .config import config
 from .model import FishingRecord, SpecialFishes
 from .fish_helper import *
+
+# EconomyValue integration
+_currency_id: str | None = None
+
+def _get_fishing_currency_id() -> str:
+    """Get the fishing currency ID.
+    
+    If init_currency has been called and found an existing currency, return that ID.
+    Otherwise, generate the default ID.
+    """
+    global _currency_id
+    if _currency_id:
+        return _currency_id
+    return "fishing_" + config.fishing_coin_name.replace(" ", "_").lower()
+
+
+async def init_currency() -> None:
+    """Initialize the fishing currency in EconomyValue.
+    
+    If a currency with the same display_name already exists, reuse it instead of creating a new one.
+    Handles cases where multiple currencies with the same name exist.
+    """
+    global _currency_id
+    from nonebot_plugin_value.api.api_currency import CurrencyData
+    from nonebot_plugin_orm import get_session
+    from nonebot import logger
+    from sqlalchemy import select
+    
+    # Use display_name (the correct field in CurrencyMeta) to query
+    session = get_session()
+    async with session.begin():
+        from nonebot_plugin_value.models.currency import CurrencyMeta
+        stmt = select(CurrencyMeta).where(CurrencyMeta.display_name == config.fishing_coin_name)
+        result = await session.execute(stmt)
+        currencies = result.scalars().all()
+        
+        if currencies:
+            # Use the first currency found
+            existing_currency = currencies[0]
+            _currency_id = existing_currency.id
+            logger.info(f"Reusing existing currency '{config.fishing_coin_name}' (ID: {_currency_id})")
+            
+            # If there are duplicates, log a warning
+            if len(currencies) > 1:
+                logger.warning(f"Found {len(currencies)} duplicate currencies with display_name '{config.fishing_coin_name}'. Using first one (ID: {_currency_id})")
+        else:
+            # Create new currency
+            _currency_id = _get_fishing_currency_id()
+            currency_data = CurrencyData(
+                id=_currency_id,
+                display_name=config.fishing_coin_name,
+                symbol=config.fishing_coin_name[0] if config.fishing_coin_name else "币",
+                default_balance=0.0,
+                allow_negative=False,
+            )
+            await _get_or_create_currency(currency_data)
+
+
+async def get_user_balance(user_id: str) -> int:
+    """Get user's fishing currency balance."""
+    currency_id = _get_fishing_currency_id()
+    account = await _get_or_create_account(user_id, currency_id)
+    return int(account.balance)
+
+
+async def add_user_balance(user_id: str, amount: int, source: str = "fishing") -> int:
+    """Add balance to user's fishing currency account."""
+    currency_id = _get_fishing_currency_id()
+    await _add_balance(user_id, amount, source, currency_id)
+    account = await _get_or_create_account(user_id, currency_id)
+    return int(account.balance)
+
+
+async def del_user_balance(user_id: str, amount: int, source: str = "fishing") -> int:
+    """Deduct balance from user's fishing currency account."""
+    currency_id = _get_fishing_currency_id()
+    await _del_balance(user_id, amount, source, currency_id)
+    account = await _get_or_create_account(user_id, currency_id)
+    return int(account.balance)
+
+
+async def transfer_balance(from_id: str, to_id: str, amount: int, source: str = "fishing_transfer") -> int:
+    """Transfer balance between users."""
+    currency_id = _get_fishing_currency_id()
+    await _transfer_funds(from_id, to_id, amount, source, currency_id)
+    account = await _get_or_create_account(from_id, currency_id)
+    return int(account.balance)
 
 
 def get_key_by_index(
@@ -308,7 +408,6 @@ async def save_achievement(user_id: str, achievement_name: str):
             frequency=0,
             fishes="{}",
             special_fishes="{}",
-            coin=0,
             achievements=dump_achievements,
         )
         session.add(new_record)
@@ -353,7 +452,6 @@ async def save_fish(user_id: str, fish_name: str) -> None:
             frequency=1,
             fishes=dump_fishes,
             special_fishes="{}",
-            coin=0,
             achievements="[]",
         )
         session.add(new_record)
@@ -395,7 +493,6 @@ async def save_special_fish(user_id: str, fish_name: str) -> None:
                 frequency=1,
                 fishes="{}",
                 special_fishes=dump_fishes,
-                coin=0,
                 achievements=[],
             )
             session.add(new_record)
@@ -463,16 +560,18 @@ async def sell_fish(
                     update(FishingRecord)
                     .where(FishingRecord.user_id == user_id)
                     .values(
-                        coin=fishes_record.coin + fish_price * quantity,
                         fishes=dump_fishes,
                     )
                 )
                 await session.execute(user_update)
                 await session.commit()
 
+                earned = fish_price * quantity
+                await add_user_balance(user_id, earned, f"sell_fish_{fish_name}")
+
                 return (
                     f"你以 {fish_price} {fishing_coin_name} / 条的价格卖出了 {quantity} 条 {fish_name}, "
-                    f"你获得了 {fish_price * quantity} {fishing_coin_name}"
+                    f"你获得了 {earned} {fishing_coin_name}"
                 )
             elif fish_name in spec_fishes and spec_fishes[fish_name] > 0:
                 fish_price = config.special_fish_price
@@ -486,15 +585,18 @@ async def sell_fish(
                     update(FishingRecord)
                     .where(FishingRecord.user_id == user_id)
                     .values(
-                        coin=fishes_record.coin + fish_price * quantity,
                         special_fishes=dump_fishes,
                     )
                 )
                 await session.execute(user_update)
                 await session.commit()
+
+                earned = fish_price * quantity
+                await add_user_balance(user_id, earned, f"sell_special_fish_{fish_name}")
+
                 return (
                     f"你以 {fish_price} {fishing_coin_name} / 条的价格卖出了 {quantity} 条 {fish_name}, "
-                    f"获得了 {fish_price * quantity} {fishing_coin_name}"
+                    f"获得了 {earned} {fishing_coin_name}"
                 )
             else:
                 return "查无此鱼"
@@ -511,17 +613,17 @@ async def buy_fish(user_id: str, fish_name: str, quantity: int = 1) -> str:
     fish = get_fish_by_name(fish_name)
     total_price = int(fish.buy_price * fish.amount * quantity)
 
+    balance = await get_user_balance(user_id)
+    if balance < total_price:
+        coin_less = str(total_price - balance)
+        return f"你没有足够的 {fishing_coin_name}, 还需 {coin_less} {fishing_coin_name}"
+
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
         fishes_record = await session.scalar(select_user)
         if fishes_record := fishes_record:
             loads_fishes = json.loads(fishes_record.fishes)
-            user_coin = fishes_record.coin
-            if user_coin < total_price:
-                coin_less = str(total_price - fishes_record.coin)
-                return f"你没有足够的 {fishing_coin_name}, 还需 {coin_less} {fishing_coin_name}"
-            user_coin -= total_price
             try:
                 loads_fishes[fish_name] += fish.amount * quantity
             except KeyError:
@@ -530,13 +632,13 @@ async def buy_fish(user_id: str, fish_name: str, quantity: int = 1) -> str:
             user_update = (
                 update(FishingRecord)
                 .where(FishingRecord.user_id == user_id)
-                .values(coin=user_coin, fishes=dump_fishes)
+                .values(fishes=dump_fishes)
             )
             await session.execute(user_update)
             await session.commit()
-            return f"你用 {total_price} {fishing_coin_name} 买入了 {quantity} 份 {fish_name}"
-        else:
-            return "不想钓鱼的人就别在渔具店逛了~"
+
+    await del_user_balance(user_id, total_price, f"buy_fish_{fish_name}")
+    return f"你用 {total_price} {fishing_coin_name} 买入了 {quantity} 份 {fish_name}"
 
 
 async def free_fish(user_id: str, fish_name: str) -> str:
@@ -545,7 +647,6 @@ async def free_fish(user_id: str, fish_name: str) -> str:
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
         fishes_record = await session.scalar(select_user)
         if fishes_record:
-            user_coin = fishes_record.coin
             spec_fishes = json.loads(fishes_record.special_fishes)
             if fish_name in spec_fishes and spec_fishes[fish_name] > 0:
                 spec_fishes[fish_name] -= 1
@@ -566,23 +667,19 @@ async def free_fish(user_id: str, fish_name: str) -> str:
                 if fish_name in fish_list:
                     return "普通鱼不能放生哦~"
 
-                if user_coin < config.special_fish_free_price:
+                balance = await get_user_balance(user_id)
+                if balance < config.special_fish_free_price:
                     special_fish_coin_less = str(
-                        config.special_fish_free_price - fishes_record.coin
+                        config.special_fish_free_price - balance
                     )
                     return f"你没有足够的 {fishing_coin_name}, 还需 {special_fish_coin_less} {fishing_coin_name}"
-                user_coin -= config.special_fish_free_price
+
                 new_record = SpecialFishes(user_id=user_id, fish=fish_name)
                 session.add(new_record)
-                user_update = (
-                    update(FishingRecord)
-                    .where(FishingRecord.user_id == user_id)
-                    .values(coin=user_coin)
-                )
-                await session.execute(user_update)
                 await session.commit()
-                return f"你花费 {config.special_fish_free_price} {fishing_coin_name} 放生了 {fish_name}, 未来或许会被有缘人钓到呢"
-        return "你甚至还没钓过鱼"
+
+    await del_user_balance(user_id, config.special_fish_free_price, f"free_fish_{fish_name}")
+    return f"你花费 {config.special_fish_free_price} {fishing_coin_name} 放生了 {fish_name}, 未来或许会被有缘人钓到呢"
 
 
 async def lottery(user_id: str) -> str:
@@ -592,54 +689,27 @@ async def lottery(user_id: str) -> str:
     fishing_cooldown = random.randint(
         config.fishing_cooldown_time_min, config.fishing_cooldown_time_max
     )
-    async with session.begin():
-        select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
-        fishes_record = await session.scalar(select_user)
-        if fishes_record:
-            user_coin = fishes_record.coin
-            if user_coin < 0:
-                new_coin = random.randrange(1, 50)
-                user_update = (
-                    update(FishingRecord)
-                    .where(FishingRecord.user_id == user_id)
-                    .values(
-                        time=time_now + fishing_cooldown,
-                        coin=0 + new_coin,
-                    )
-                )
-                await session.execute(user_update)
-                await session.commit()
-                return f"你是不是被哪个坏心眼的神惩罚了……河神帮你还完了欠款"
-            if user_coin <= 30:
-                new_coin = random.randrange(1, 50)
-                user_update = (
-                    update(FishingRecord)
-                    .where(FishingRecord.user_id == user_id)
-                    .values(
-                        time=time_now + fishing_cooldown,
-                        coin=fishes_record.coin + new_coin,
-                    )
-                )
-                await session.execute(user_update)
-                await session.commit()
-                return f"你穷得连河神都看不下去了，给了你 {new_coin} {fishing_coin_name} w(ﾟДﾟ)w"
-            new_coin = abs(user_coin) / 3
-            new_coin = random.randrange(5000, 15000) / 10000 * new_coin
-            new_coin = int(new_coin) if new_coin > 1 else 1
-            new_coin *= random.randrange(-1, 2, 2)
-            user_update = (
-                update(FishingRecord)
-                .where(FishingRecord.user_id == user_id)
-                .values(
-                    time=time_now + fishing_cooldown,
-                    coin=fishes_record.coin + new_coin,
-                )
-            )
-            await session.execute(user_update)
-            await session.commit()
-            return f'你{"获得" if new_coin >= 0 else "血亏"}了 {abs(new_coin)} {fishing_coin_name}'
-        else:
-            return "河神没有回应你……"
+    balance = await get_user_balance(user_id)
+
+    if balance < 0:
+        new_coin = random.randrange(1, 50)
+        await add_user_balance(user_id, new_coin - balance, "lottery_negative_balance")
+        return f"你是不是被哪个坏心眼的神惩罚了……河神帮你还完了欠款"
+    if balance <= 30:
+        new_coin = random.randrange(1, 50)
+        await add_user_balance(user_id, new_coin, "lottery_poor")
+        return f"你穷得连河神都看不下去了，给了你 {new_coin} {fishing_coin_name} w(ﾟДﾟ)w"
+    new_coin = abs(balance) / 3
+    new_coin = random.randrange(5000, 15000) / 10000 * new_coin
+    new_coin = int(new_coin) if new_coin > 1 else 1
+    new_coin *= random.randrange(-1, 2, 2)
+
+    if new_coin >= 0:
+        await add_user_balance(user_id, new_coin, "lottery_win")
+    else:
+        await del_user_balance(user_id, abs(new_coin), "lottery_loss")
+
+    return f'你{"获得" if new_coin >= 0 else "血亏"}了 {abs(new_coin)} {fishing_coin_name}'
 
 
 async def give(
@@ -656,15 +726,10 @@ async def give(
         if record:
 
             if name_or_index == "coin" or name_or_index == fishing_coin_name:
-                user_update = (
-                    update(FishingRecord)
-                    .where(FishingRecord.user_id == user_id)
-                    .values(
-                        coin=record.coin + quantity,
-                    )
-                )
-                await session.execute(user_update)
-                await session.commit()
+                if quantity >= 0:
+                    await add_user_balance(user_id, quantity, "admin_give_coin")
+                else:
+                    await del_user_balance(user_id, abs(quantity), "admin_take_coin")
                 return f"使用滥权之力成功为 {user_id} {"增加" if quantity >= 0 else "减少"} {abs(quantity)} {fishing_coin_name} ヾ(≧▽≦*)o"
 
             loads_fishes = json.loads(record.fishes)
@@ -814,13 +879,8 @@ async def get_stats(user_id: str) -> str:
 
 
 async def get_balance(user_id: str) -> str:
-    session = get_session()
-    async with session.begin():
-        select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
-        fishes_record = await session.scalar(select_user)
-        if fishes_record:
-            return f"🪙你有 {fishes_record.coin} {fishing_coin_name}"
-        return "🪙你什么也没有 :)"
+    balance = await get_user_balance(user_id)
+    return f"🪙你有 {balance} {fishing_coin_name}"
 
 
 async def get_backpack(user_id: str, limit: int | None = None) -> list[str]:
@@ -887,19 +947,13 @@ async def get_achievements(user_id: str) -> str:
 
 
 async def get_board() -> list[tuple]:
-    session = get_session()
-    async with session.begin():
-        select_users = (
-            select(FishingRecord).order_by(FishingRecord.coin.desc()).limit(10)
-        )
-        record = await session.scalars(select_users)
-        if record:
-            top_users_list = []
-            for user in record:
-                top_users_list.append((user.user_id, user.coin))
-            top_users_list.sort(key=lambda user: user[1], reverse=True)
-            return top_users_list
-        return []
+    from nonebot_plugin_value.api.api_balance import list_accounts
+
+    currency_id = _get_fishing_currency_id()
+    accounts = await list_accounts(currency_id)
+    top_users_list = [(account.user_id, int(account.balance)) for account in accounts]
+    top_users_list.sort(key=lambda user: user[1], reverse=True)
+    return top_users_list[:10]
 
 
 def get_shop() -> list[MessageSegment]:
