@@ -9,130 +9,200 @@ from sqlalchemy import select, update, delete
 from sqlalchemy.sql.expression import func
 from nonebot.adapters.onebot.v11 import MessageSegment
 from nonebot_plugin_orm import get_session
-from nonebot import require
-
-require("nonebot_plugin_value")
-from nonebot_plugin_value.api.api_balance import (
-    get_or_create_account as _get_or_create_account,
-    add_balance as _add_balance,
-    del_balance as _del_balance,
-    transfer_funds as _transfer_funds,
-)
-from nonebot_plugin_value.api.api_currency import (
-    get_or_create_currency as _get_or_create_currency,
-    get_currency as _get_currency,
-)
 
 from .config import config
 from .model import FishingRecord, SpecialFishes
 from .fish_helper import *
 
-# EconomyValue integration
-_currency_id: str | None = None
+# ---- nonebot-plugin-value optional integration ----
+_value_available = False
+_currency_id = None
 
-def _get_fishing_currency_id() -> str:
-    """Get the fishing currency ID.
-    
-    If init_currency has been called and found an existing currency, return that ID.
-    Otherwise, generate the default ID.
-    """
+try:
+    from nonebot import require
+    require("nonebot_plugin_value")
+    from nonebot_plugin_value.api.api_balance import (
+        get_or_create_account as _get_or_create_account,
+        add_balance as _add_balance,
+        del_balance as _del_balance,
+    )
+    from nonebot_plugin_value.api.api_currency import (
+        get_or_create_currency as _get_or_create_currency,
+    )
+    _value_available = True
+except Exception:
+    _value_available = False
+
+
+def _get_fishing_currency_id():
     global _currency_id
     if _currency_id:
         return _currency_id
     return "fishing_" + config.fishing_coin_name.replace(" ", "_").lower()
 
 
-async def init_currency() -> None:
-    """Initialize the fishing currency in EconomyValue.
-    
-    If a currency with the same display_name already exists, reuse it instead of creating a new one.
-    Handles cases where multiple currencies with the same name exist.
-    """
+async def init_currency():
     global _currency_id
-    from nonebot_plugin_value.api.api_currency import CurrencyData
-    from nonebot_plugin_orm import get_session
+    if not _value_available:
+        return
+
     from nonebot import logger
-    from sqlalchemy import select
-    
-    # Use display_name (the correct field in CurrencyMeta) to query
-    session = get_session()
+    from nonebot_plugin_orm import get_session as _get_session
+    from nonebot_plugin_value.api.api_currency import CurrencyData
+    from nonebot_plugin_value.models.currency import CurrencyMeta
+    from sqlalchemy import select as _select
+
+    session = _get_session()
     async with session.begin():
-        from nonebot_plugin_value.models.currency import CurrencyMeta
-        stmt = select(CurrencyMeta).where(CurrencyMeta.display_name == config.fishing_coin_name)
+        stmt = _select(CurrencyMeta).where(
+            CurrencyMeta.display_name == config.fishing_coin_name
+        )
         result = await session.execute(stmt)
         currencies = result.scalars().all()
-        
+
         if currencies:
-            # Use the first currency found
             existing_currency = currencies[0]
             _currency_id = existing_currency.id
-            logger.info(f"Reusing existing currency '{config.fishing_coin_name}' (ID: {_currency_id})")
-            
-            # If there are duplicates, log a warning
+            logger.info(
+                f"Reusing existing currency '{config.fishing_coin_name}' (ID: {_currency_id})"
+            )
             if len(currencies) > 1:
-                logger.warning(f"Found {len(currencies)} duplicate currencies with display_name '{config.fishing_coin_name}'. Using first one (ID: {_currency_id})")
+                logger.warning(
+                    f"Found {len(currencies)} duplicate currencies with display_name "
+                    f"'{config.fishing_coin_name}'. Using first one (ID: {_currency_id})"
+                )
         else:
-            # Create new currency
             _currency_id = _get_fishing_currency_id()
             currency_data = CurrencyData(
                 id=_currency_id,
                 display_name=config.fishing_coin_name,
-                symbol=config.fishing_coin_name[0] if config.fishing_coin_name else "币",
+                symbol=config.fishing_coin_name[0] if config.fishing_coin_name else "\u5e01",
                 default_balance=0.0,
                 allow_negative=False,
             )
             await _get_or_create_currency(currency_data)
 
-
-async def get_user_balance(user_id: str) -> int:
-    """Get user's fishing currency balance."""
-    currency_id = _get_fishing_currency_id()
-    account = await _get_or_create_account(user_id, currency_id)
-    return int(account.balance)
+    # Migrate old coin data to nonebot-plugin-value
+    await _migrate_old_coin_data()
 
 
-async def add_user_balance(user_id: str, amount: int, source: str = "fishing") -> int:
-    """Add balance to user's fishing currency account."""
-    currency_id = _get_fishing_currency_id()
-    await _add_balance(user_id, amount, source, currency_id)
-    account = await _get_or_create_account(user_id, currency_id)
-    return int(account.balance)
+async def _migrate_old_coin_data():
+    if not _value_available:
+        return
+
+    from nonebot import logger
+
+    session = get_session()
+    async with session.begin():
+        stmt = select(FishingRecord).where(FishingRecord.coin > 0)
+        result = await session.execute(stmt)
+        records = result.scalars().all()
+
+        if not records:
+            return
+
+        logger.info(f"Migrating coin data for {len(records)} users to nonebot-plugin-value...")
+        for record in records:
+            if record.coin > 0:
+                await _add_balance(
+                    record.user_id, record.coin, "migration_from_coin_column", _get_fishing_currency_id()
+                )
+                logger.info(
+                    f"Migrated {record.coin} {config.fishing_coin_name} for user {record.user_id}"
+                )
+                # Zero out the old coin column after migration
+                await session.execute(
+                    update(FishingRecord)
+                    .where(FishingRecord.id == record.id)
+                    .values(coin=0)
+                )
+
+        await session.commit()
+        logger.info("Coin data migration complete.")
 
 
-async def del_user_balance(user_id: str, amount: int, source: str = "fishing") -> int:
-    """Deduct balance from user's fishing currency account."""
-    currency_id = _get_fishing_currency_id()
-    await _del_balance(user_id, amount, source, currency_id)
-    account = await _get_or_create_account(user_id, currency_id)
-    return int(account.balance)
+# ---- Balance abstraction layer ----
+
+async def get_user_balance(user_id):
+    if _value_available:
+        currency_id = _get_fishing_currency_id()
+        account = await _get_or_create_account(user_id, currency_id)
+        return int(account.balance)
+    else:
+        session = get_session()
+        async with session.begin():
+            record = await session.scalar(
+                select(FishingRecord).where(FishingRecord.user_id == user_id)
+            )
+            return record.coin if record else 0
 
 
-async def transfer_balance(from_id: str, to_id: str, amount: int, source: str = "fishing_transfer") -> int:
-    """Transfer balance between users."""
-    currency_id = _get_fishing_currency_id()
-    await _transfer_funds(from_id, to_id, amount, source, currency_id)
-    account = await _get_or_create_account(from_id, currency_id)
-    return int(account.balance)
+async def add_user_balance(user_id, amount, source="fishing"):
+    if _value_available:
+        currency_id = _get_fishing_currency_id()
+        await _add_balance(user_id, amount, source, currency_id)
+        account = await _get_or_create_account(user_id, currency_id)
+        return int(account.balance)
+    else:
+        time_now = int(time.time())
+        session = get_session()
+        async with session.begin():
+            record = await session.scalar(
+                select(FishingRecord).where(FishingRecord.user_id == user_id)
+            )
+            if record:
+                new_coin = record.coin + amount
+                await session.execute(
+                    update(FishingRecord)
+                    .where(FishingRecord.user_id == user_id)
+                    .values(coin=new_coin)
+                )
+                await session.commit()
+                return new_coin
+            new_record = FishingRecord(
+                user_id=user_id,
+                time=time_now,
+                frequency=0,
+                fishes="{}",
+                special_fishes="{}",
+                coin=amount,
+                achievements="[]",
+            )
+            session.add(new_record)
+            await session.commit()
+            return amount
 
 
-def get_key_by_index(
-    dict: dict, index: int, default: Hashable | None = None
-) -> Hashable | None:
-    """Utils: get the key of OrderedDict by index.
+async def del_user_balance(user_id, amount, source="fishing"):
+    if _value_available:
+        currency_id = _get_fishing_currency_id()
+        await _del_balance(user_id, amount, source, currency_id)
+        account = await _get_or_create_account(user_id, currency_id)
+        return int(account.balance)
+    else:
+        session = get_session()
+        async with session.begin():
+            record = await session.scalar(
+                select(FishingRecord).where(FishingRecord.user_id == user_id)
+            )
+            if record:
+                new_coin = record.coin - amount
+                await session.execute(
+                    update(FishingRecord)
+                    .where(FishingRecord.user_id == user_id)
+                    .values(coin=new_coin)
+                )
+                await session.commit()
+                return new_coin
+            return 0
 
-    Args:
-        dict (dict)
-        index (int)
-        default (Hashable | None, optional): default value. Defaults to None.
 
-    Returns:
-        Hashable | None: a key of dict.
-    """
+def get_key_by_index(dict, index, default=None):
     key_list = list(dict.keys())
     return key_list[index] if index < len(key_list) else default
 
 
-async def can_fishing(user_id: str) -> bool:
+async def can_fishing(user_id):
     time_now = int(time.time())
     session = get_session()
     async with session.begin():
@@ -141,7 +211,7 @@ async def can_fishing(user_id: str) -> bool:
         return True if not record else record.time < time_now
 
 
-async def can_catch_special_fish(probability_add: int):
+async def can_catch_special_fish(probability_add):
     session = get_session()
     async with session.begin():
         records = await session.execute(select(SpecialFishes))
@@ -151,13 +221,10 @@ async def can_catch_special_fish(probability_add: int):
         )
 
 
-async def check_tools(
-    user_id: str, tools: list[str] = None, check_have: bool = True
-) -> str | None:
+async def check_tools(user_id, tools=None, check_have=True):
     if not tools or tools == []:
         return None
 
-    # 这是工具吗？
     for tool in tools:
         fish = get_fish_by_name(tool)
         if not fish:
@@ -167,12 +234,10 @@ async def check_tools(
         if not props or props == []:
             return f"搞啥嘞！{tool}既不是工具也不是鱼饵！"
 
-    # 如果有两个工具，是一个工具一个鱼饵吗？
     if len(tools) == 2:
         if get_fish_by_name(tools[0]).type == get_fish_by_name(tools[1]).type:
             return "你为啥要用两个类型一样的东西？"
 
-    # 有吗？有吗？
     if check_have:
         session = get_session()
         async with session.begin():
@@ -187,7 +252,7 @@ async def check_tools(
     return None
 
 
-async def remove_tools(user_id: str, tools: list[str] = None) -> None:
+async def remove_tools(user_id, tools=None):
     if not tools or tools == []:
         return None
 
@@ -209,15 +274,12 @@ async def remove_tools(user_id: str, tools: list[str] = None) -> None:
             )
             await session.execute(user_update)
             await session.commit()
-        else:
-            pass
-            # raise ValueError("？你的 Check 是怎么通过的？")
 
 
-def get_adjusts_from_tools(tools: list = None) -> list:
+def get_adjusts_from_tools(tools=None):
     no_add = 0
     sp_add = 0
-    adjusts: list[Property] = []
+    adjusts = []
 
     if tools:
         for tool in tools:
@@ -232,7 +294,7 @@ def get_adjusts_from_tools(tools: list = None) -> list:
     return adjusts, no_add, sp_add
 
 
-def adjusted(adjusts: list[Property] = None) -> tuple:
+def adjusted(adjusts=None):
     adjusted_fishes = copy.deepcopy(can_catch_fishes)
 
     for adjust in adjusts:
@@ -266,7 +328,7 @@ def adjusted(adjusts: list[Property] = None) -> tuple:
     return adjusted_fishes_list, adjusted_weights
 
 
-def choice(adjusts: list[Property] = None) -> str:
+def choice(adjusts=None):
     adjusted_fishes_list, adjusted_weights = adjusted(adjusts)
     choices = random.choices(
         adjusted_fishes_list,
@@ -275,7 +337,7 @@ def choice(adjusts: list[Property] = None) -> str:
     return choices[0]
 
 
-async def get_fish(user_id: int, tools: list = None) -> str:
+async def get_fish(user_id, tools=None):
     adjusts, no_add, sp_add = get_adjusts_from_tools(tools)
 
     if random.random() < config.no_fish_probability + no_add:
@@ -297,7 +359,7 @@ async def get_fish(user_id: int, tools: list = None) -> str:
     return result
 
 
-def predict(tools: list = None) -> str:
+def predict(tools=None):
     no = config.no_fish_probability
     sp = config.special_fish_probability
     sp_price = config.special_fish_price
@@ -307,7 +369,6 @@ def predict(tools: list = None) -> str:
     sp_t = min(max(sp + sp_add, 0), 1)
     no_t = min(max(no + no_add, 0), 1)
 
-    # 拉取矫正权重
     adjusted_fishes_list, adjusted_weights = adjusted(adjusts)
 
     adjusted_fishes_value = []
@@ -315,7 +376,6 @@ def predict(tools: list = None) -> str:
         fish = get_fish_by_name(fish_name)
         adjusted_fishes_value.append(int(fish.price * fish.amount))
 
-    # 归一化
     total_weight = sum(adjusted_weights)
     probabilities = [w / total_weight for w in adjusted_weights]
     expected_value = sum(v * p for v, p in zip(adjusted_fishes_value, probabilities))
@@ -325,18 +385,16 @@ def predict(tools: list = None) -> str:
     result += f"特殊鱼概率：{round(sp_t * (1 - no_t), 6)}\n"
     result += f"空军概率：{round(no_t, 6)}\n"
 
-    # 无特殊鱼
     expected_value = expected_value * (1 - no_t)
     result += f"无特殊鱼时期望为：{expected_value:.3f}\n"
 
-    # 有特殊鱼
     expected_value = expected_value * (1 - sp_t) + sp_price * sp_t * (1 - no_t)
     result += f"有特殊鱼期望为：{expected_value:.3f}"
 
     return result
 
 
-async def random_get_a_special_fish() -> str:
+async def random_get_a_special_fish():
     session = get_session()
     async with session.begin():
         random_select = select(SpecialFishes).order_by(func.random())
@@ -344,7 +402,7 @@ async def random_get_a_special_fish() -> str:
         return data.fish
 
 
-async def check_achievement(user_id: str) -> str | None:
+async def check_achievement(user_id):
     session = get_session()
     async with session.begin():
         record = await session.scalar(
@@ -371,7 +429,7 @@ async def check_achievement(user_id: str) -> str | None:
         return result_list if result_list != [] else None
 
 
-async def is_exists_achievement(user_id: str, achievement_name: str) -> bool:
+async def is_exists_achievement(user_id, achievement_name):
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
@@ -382,7 +440,7 @@ async def is_exists_achievement(user_id: str, achievement_name: str) -> bool:
         return False
 
 
-async def save_achievement(user_id: str, achievement_name: str):
+async def save_achievement(user_id, achievement_name):
     time_now = int(time.time())
     session = get_session()
     async with session.begin():
@@ -414,7 +472,7 @@ async def save_achievement(user_id: str, achievement_name: str):
         await session.commit()
 
 
-async def save_fish(user_id: str, fish_name: str) -> None:
+async def save_fish(user_id, fish_name):
     time_now = int(time.time())
     fishing_cooldown = random.randint(
         config.fishing_cooldown_time_min, config.fishing_cooldown_time_max
@@ -458,7 +516,7 @@ async def save_fish(user_id: str, fish_name: str) -> None:
         await session.commit()
 
 
-async def save_special_fish(user_id: str, fish_name: str) -> None:
+async def save_special_fish(user_id, fish_name):
     time_now = int(time.time())
     fishing_cooldown = random.randint(
         config.fishing_cooldown_time_min, config.fishing_cooldown_time_max
@@ -509,13 +567,7 @@ async def save_special_fish(user_id: str, fish_name: str) -> None:
         await session.commit()
 
 
-async def sell_fish(
-    user_id: str,
-    name_or_index: str,
-    quantity: int = 1,
-    as_index: bool = False,
-    as_special: bool = False,
-) -> str:
+async def sell_fish(user_id, name_or_index, quantity=1, as_index=False, as_special=False):
     if quantity <= 0:
         return "你在卖什么 w(ﾟДﾟ)w"
 
@@ -559,9 +611,7 @@ async def sell_fish(
                 user_update = (
                     update(FishingRecord)
                     .where(FishingRecord.user_id == user_id)
-                    .values(
-                        fishes=dump_fishes,
-                    )
+                    .values(fishes=dump_fishes)
                 )
                 await session.execute(user_update)
                 await session.commit()
@@ -584,9 +634,7 @@ async def sell_fish(
                 user_update = (
                     update(FishingRecord)
                     .where(FishingRecord.user_id == user_id)
-                    .values(
-                        special_fishes=dump_fishes,
-                    )
+                    .values(special_fishes=dump_fishes)
                 )
                 await session.execute(user_update)
                 await session.commit()
@@ -604,7 +652,7 @@ async def sell_fish(
             return "还没钓鱼就想卖鱼?"
 
 
-async def buy_fish(user_id: str, fish_name: str, quantity: int = 1) -> str:
+async def buy_fish(user_id, fish_name, quantity=1):
     if quantity <= 0:
         return "别在渔具店老板面前炫耀自己的鱼 (..-˘ ˘-.#)"
     if fish_name not in can_buy_fishes:
@@ -641,7 +689,7 @@ async def buy_fish(user_id: str, fish_name: str, quantity: int = 1) -> str:
     return f"你用 {total_price} {fishing_coin_name} 买入了 {quantity} 份 {fish_name}"
 
 
-async def free_fish(user_id: str, fish_name: str) -> str:
+async def free_fish(user_id, fish_name):
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
@@ -682,8 +730,7 @@ async def free_fish(user_id: str, fish_name: str) -> str:
     return f"你花费 {config.special_fish_free_price} {fishing_coin_name} 放生了 {fish_name}, 未来或许会被有缘人钓到呢"
 
 
-async def lottery(user_id: str) -> str:
-    """算法来自于 https://github.com/fossifer/minesweeperbot/blob/master/cards.py"""
+async def lottery(user_id):
     session = get_session()
     time_now = int(time.time())
     fishing_cooldown = random.randint(
@@ -712,13 +759,7 @@ async def lottery(user_id: str) -> str:
     return f'你{"获得" if new_coin >= 0 else "血亏"}了 {abs(new_coin)} {fishing_coin_name}'
 
 
-async def give(
-    user_id: str,
-    name_or_index: str,
-    quantity: int = 1,
-    as_index: bool = False,
-    as_special: bool = False,
-) -> str:
+async def give(user_id, name_or_index, quantity=1, as_index=False, as_special=False):
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
@@ -785,7 +826,7 @@ async def give(
         return "未查找到用户信息, 无法执行滥权操作 w(ﾟДﾟ)w"
 
 
-async def get_all_special_fish() -> dict[str, int]:
+async def get_all_special_fish():
     session = get_session()
     async with session.begin():
         random_select = select(SpecialFishes.fish).order_by(SpecialFishes.fish.asc())
@@ -802,7 +843,7 @@ async def get_all_special_fish() -> dict[str, int]:
     return result
 
 
-async def remove_special_fish(name_or_index: str, as_index: bool = False) -> str | None:
+async def remove_special_fish(name_or_index, as_index=False):
     pool = await get_all_special_fish()
 
     if as_index:
@@ -831,8 +872,8 @@ async def remove_special_fish(name_or_index: str, as_index: bool = False) -> str
     return f"已成功捞出 {fish_name}"
 
 
-async def get_pool(name_limit: int = 30, page_limit: int = 200) -> list[MessageSegment]:
-    messages: list[MessageSegment] = []
+async def get_pool(name_limit=30, page_limit=200):
+    messages = []
     pool = await get_all_special_fish()
     messages.append(
         MessageSegment.text(f"现在鱼池里面有 {sum(list(pool.values()))} 条鱼。")
@@ -868,7 +909,7 @@ async def get_pool(name_limit: int = 30, page_limit: int = 200) -> list[MessageS
     return messages
 
 
-async def get_stats(user_id: str) -> str:
+async def get_stats(user_id):
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
@@ -878,12 +919,12 @@ async def get_stats(user_id: str) -> str:
         return "🐟你还没有钓过鱼，快去钓鱼吧"
 
 
-async def get_balance(user_id: str) -> str:
+async def get_balance(user_id):
     balance = await get_user_balance(user_id)
     return f"🪙你有 {balance} {fishing_coin_name}"
 
 
-async def get_backpack(user_id: str, limit: int | None = None) -> list[str]:
+async def get_backpack(user_id, limit=None):
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
@@ -893,7 +934,7 @@ async def get_backpack(user_id: str, limit: int | None = None) -> list[str]:
             loads_fishes = {
                 key: loads_fishes[key] for key in fish_list if key in loads_fishes
             }
-            spec_fishes: dict = json.loads(fishes_record.special_fishes)
+            spec_fishes = json.loads(fishes_record.special_fishes)
             if spec_fishes:
                 spec_fishes = dict(sorted(spec_fishes.items()))
                 if limit:
@@ -908,9 +949,7 @@ async def get_backpack(user_id: str, limit: int | None = None) -> list[str]:
         return ["🎒你的背包里空无一物"]
 
 
-def print_backpack(
-    backpack: dict, special_backpack: dict = None, limit: int | None = None
-) -> list[str]:
+def print_backpack(backpack, special_backpack=None, limit=None):
     i = 0
     result = []
     for fish_name, quantity in backpack.items():
@@ -919,7 +958,7 @@ def print_backpack(
 
     if special_backpack:
         i = 0
-        special_result: list[str] = []
+        special_result = []
         for fish_name, quantity in special_backpack.items():
             if limit:
                 special_result.append(
@@ -935,7 +974,7 @@ def print_backpack(
     return ["🎒普通鱼:\n" + "\n".join(result)]
 
 
-async def get_achievements(user_id: str) -> str:
+async def get_achievements(user_id):
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
@@ -946,18 +985,32 @@ async def get_achievements(user_id: str) -> str:
         return "你甚至还没钓过鱼 (╬▔皿▔)╯"
 
 
-async def get_board() -> list[tuple]:
-    from nonebot_plugin_value.api.api_balance import list_accounts
+async def get_board():
+    if _value_available:
+        from nonebot_plugin_value.api.api_balance import list_accounts
+        currency_id = _get_fishing_currency_id()
+        accounts = await list_accounts(currency_id)
+        top_users_list = [(account.id, int(account.balance)) for account in accounts]
+        top_users_list.sort(key=lambda user: user[1], reverse=True)
+        return top_users_list[:10]
+    else:
+        session = get_session()
+        async with session.begin():
+            select_users = (
+                select(FishingRecord).order_by(FishingRecord.coin.desc()).limit(10)
+            )
+            record = await session.scalars(select_users)
+            if record:
+                top_users_list = []
+                for user in record:
+                    top_users_list.append((user.user_id, user.coin))
+                top_users_list.sort(key=lambda user: user[1], reverse=True)
+                return top_users_list
+            return []
 
-    currency_id = _get_fishing_currency_id()
-    accounts = await list_accounts(currency_id)
-    top_users_list = [(account.user_id, int(account.balance)) for account in accounts]
-    top_users_list.sort(key=lambda user: user[1], reverse=True)
-    return top_users_list[:10]
 
-
-def get_shop() -> list[MessageSegment]:
-    messages: list[MessageSegment] = []
+def get_shop():
+    messages = []
 
     messages.append(MessageSegment.text("===== 钓鱼用具店 ====="))
 

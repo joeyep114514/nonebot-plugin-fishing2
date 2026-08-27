@@ -4,7 +4,7 @@ build-backend = "poetry.core.masonry.api"
 
 [project]
 name = "nonebot-plugin-fishing2"
-version = "1.0.3"
+version = "1.1.0"
 description = "更好的电子钓鱼"
 authors = [
     {name = "Polaris_Light", email = "995905922@qq.com" },
@@ -17,7 +17,6 @@ dependencies = [
     "nonebot-plugin-localstore>=0.6.0",
     "sqlalchemy>=2.0.27",
     "nonebot-plugin-orm>=0.7.1",
-    "nonebot-plugin-value>=0.1.0",
 ]
 readme = "README.md"
 license = "MIT"
@@ -25,6 +24,9 @@ license-files = ["LICEN[CS]E*"]
 requires-python = ">=3.8"
 keywords = ["fishing"]
 classifiers = []
+
+[project.optional-dependencies]
+value = ["nonebot-plugin-value>=0.1.0"]
 
 [project.urls]
 Homepage = "https://github.com/GLDYM/nonebot-plugin-fishing2"
@@ -36,4 +38,4 @@ pydantic = ">=1.10"
 nonebot-plugin-localstore = ">=0.6.0"
 sqlalchemy = ">=2.0.27"
 nonebot-plugin-orm = ">=0.7.1"
-nonebot-plugin-value = ">=0.1.0"
+nonebot-plugin-value = {version = ">=0.1.0", optional = true}

@@ -1,7 +1,6 @@
 from nonebot import require
 
 require("nonebot_plugin_orm")  # noqa
-require("nonebot_plugin_value")  # noqa
 
 import copy
 import shlex
@@ -44,6 +43,7 @@ from .data_source import (
     get_pool,
     remove_special_fish,
     init_currency,
+    _value_available,
 )
 from .fish_helper import fish_list, get_fish_by_name
 
@@ -78,7 +78,7 @@ __plugin_meta__ = PluginMetadata(
     homepage="https://github.com/GLDYM/nonebot-plugin-fishing2",
     config=Config,
     supported_adapters={"~onebot.v11"},
-    extra={"author": "Polaris_Light", "version": "1.0.2", "priority": 5},
+    extra={"author": "Polaris_Light", "version": "1.1.0", "priority": 5},
 )
 
 
@@ -622,6 +622,9 @@ async def _(bot: Bot, event: Union[GroupMessageEvent, PrivateMessageEvent]):
     is_self = event.self_id == user_id
     if not is_superuser and not is_self:
         return None
+
+    if not _value_available:
+        await test_value_api_cmd.finish("nonebot-plugin-value 未安装，无法测试经济API")
 
     try:
         from nonebot_plugin_value.api.api_currency import list_currencies
