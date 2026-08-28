@@ -1064,19 +1064,15 @@ async def get_board():
             return []
 
 
-def get_shop():
-    messages = []
-
-    messages.append(MessageSegment.text("===== 钓鱼用具店 ====="))
+def get_shop() -> str:
+    lines = ["===== 钓鱼用具店 ====="]
 
     for fish in config_fishes:
         if fish.can_buy:
             total_price = int(fish.buy_price * fish.amount)
-            messages.append(
-                MessageSegment.text(
-                    f"商品名：{fish.name} \n单份数量：{fish.amount}\n单价：{fish.buy_price} {fishing_coin_name}\n"
-                    f"单份总价：{total_price} {fishing_coin_name}\n描述：{fish.description}"
-                )
+            lines.append(
+                f"商品名：{fish.name}\n单份数量：{fish.amount}\n单价：{fish.buy_price} {fishing_coin_name}\n"
+                f"单份总价：{total_price} {fishing_coin_name}\n描述：{fish.description}"
             )
 
-    return messages
+    return "\n\n".join(lines)

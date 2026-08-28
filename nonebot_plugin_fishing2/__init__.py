@@ -45,7 +45,7 @@ from .data_source import (
     init_currency,
     _value_available,
 )
-from .fish_helper import fish_list, get_fish_by_name
+from .fish_helper import fish_list, get_fish_by_name, text_to_image
 
 fishing_coin_name = config.fishing_coin_name
 cool_down = (
@@ -141,10 +141,8 @@ async def _(bot: Bot, event: Union[GroupMessageEvent, PrivateMessageEvent]):
 
 
 @shop.handle()
-async def _(bot: Bot, event: Union[GroupMessageEvent, PrivateMessageEvent]):
-    messages = get_shop()
-    await forward_send(bot, event, messages)
-    return None
+async def _():
+    await shop.finish(MessageSegment.image(text_to_image(get_shop())))
 
 
 @fishing_lookup.handle()
@@ -301,42 +299,22 @@ async def _(
     user_id = event.get_user_id()
     is_superuser = str(user_id) in bot.config.superusers
     is_self = event.self_id == user_id
-    if not is_superuser and not is_self:
-        user_id = user_id
-    else:
+    if is_superuser or is_self:
         args = shlex.split(arg.extract_plain_text())
         target = await get_at(event)
         if target:
             args.insert(0, target)
         if len(args) >= 1:
             user_id = args[0]
-        else:
-            user_id = user_id
 
-    if not config.backpack_forward:
-        await backpack.finish(
-            (MessageSegment.at(user_id) + " \n")
-            if isinstance(event, GroupMessageEvent)
-            else ""
-            + await get_stats(user_id)
-            + "\n"
-            + await get_balance(user_id)
-            + "\n"
-            + "\n\n".join(await get_backpack(user_id))
-        )
-    else:
-        messages: list[MessageSegment] = []
-        if isinstance(event, GroupMessageEvent):
-            messages.append(MessageSegment.at(user_id))
-        messages.append(await get_stats(user_id))
-        messages.append(await get_balance(user_id))
-        try:
-            backpacks = await get_backpack(user_id)
-            await forward_send(bot, event, messages + [MessageSegment.text(msg) for msg in backpacks])
-        except ActionFailed:
-            backpacks = await get_backpack(user_id, 40)
-            await forward_send(bot, event, messages + [MessageSegment.text(msg) for msg in backpacks])            
-            
+    text = (
+        await get_stats(user_id)
+        + "\n"
+        + await get_balance(user_id)
+        + "\n"
+        + "\n".join(await get_backpack(user_id))
+    )
+    await backpack.finish(MessageSegment.image(text_to_image(text)))
 
 
 @buy.handle()
