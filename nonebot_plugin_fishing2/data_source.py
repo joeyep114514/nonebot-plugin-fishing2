@@ -741,22 +741,34 @@ async def lottery(user_id):
     if balance < 0:
         new_coin = random.randrange(1, 50)
         await add_user_balance(user_id, new_coin - balance, "lottery_negative_balance")
-        return f"你是不是被哪个坏心眼的神惩罚了……河神帮你还完了欠款"
-    if balance <= 30:
+        result = "你是不是被哪个坏心眼的神惩罚了……河神帮你还完了欠款"
+    elif balance <= 30:
         new_coin = random.randrange(1, 50)
         await add_user_balance(user_id, new_coin, "lottery_poor")
-        return f"你穷得连河神都看不下去了，给了你 {new_coin} {fishing_coin_name} w(ﾟДﾟ)w"
-    new_coin = abs(balance) / 3
-    new_coin = random.randrange(5000, 15000) / 10000 * new_coin
-    new_coin = int(new_coin) if new_coin > 1 else 1
-    new_coin *= random.randrange(-1, 2, 2)
-
-    if new_coin >= 0:
-        await add_user_balance(user_id, new_coin, "lottery_win")
+        result = f"你穷得连河神都看不下去了，给了你 {new_coin} {fishing_coin_name} w(ﾟДﾟ)w"
     else:
-        await del_user_balance(user_id, abs(new_coin), "lottery_loss")
+        new_coin = abs(balance) / 3
+        new_coin = random.randrange(5000, 15000) / 10000 * new_coin
+        new_coin = int(new_coin) if new_coin > 1 else 1
+        new_coin *= random.randrange(-1, 2, 2)
 
-    return f'你{"获得" if new_coin >= 0 else "血亏"}了 {abs(new_coin)} {fishing_coin_name}'
+        if new_coin >= 0:
+            await add_user_balance(user_id, new_coin, "lottery_win")
+        else:
+            await del_user_balance(user_id, abs(new_coin), "lottery_loss")
+
+        result = f'你{"获得" if new_coin >= 0 else "血亏"}了 {abs(new_coin)} {fishing_coin_name}'
+
+    # 祈愿与钓鱼共用冷却时间
+    async with session.begin():
+        await session.execute(
+            update(FishingRecord)
+            .where(FishingRecord.user_id == user_id)
+            .values(time=time_now + fishing_cooldown)
+        )
+        await session.commit()
+
+    return result
 
 
 async def give(user_id, name_or_index, quantity=1, as_index=False, as_special=False):
