@@ -1,8 +1,66 @@
 from typing import Literal, Optional, Union
+from io import BytesIO
 
 from nonebot.adapters.onebot.v11 import MessageSegment
+from PIL import Image, ImageDraw, ImageFont
 
 from .config import config
+
+
+def _is_emoji(character: str) -> bool:
+    codepoint = ord(character)
+    return (
+        0x1F000 <= codepoint <= 0x1FAFF
+        or 0x2600 <= codepoint <= 0x27BF
+        or 0x2300 <= codepoint <= 0x23FF
+        or 0x2B00 <= codepoint <= 0x2BFF
+        or codepoint == 0xFE0F
+    )
+
+
+_FONT_CANDIDATES = [
+    "/usr/share/fonts/truetype/wqy/wqy-microhei.ttc",
+    "/usr/share/fonts/truetype/wqy/wqy-zenhei.ttc",
+    "/usr/share/fonts/opentype/noto-cjk-otf/NotoSansCJKsc-Regular.otf",
+    "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+]
+
+
+def _load_font(size: int):
+    for path in _FONT_CANDIDATES:
+        try:
+            return ImageFont.truetype(path, size)
+        except Exception:
+            continue
+    try:
+        return ImageFont.load_default()
+    except Exception:
+        return None
+
+
+def text_to_image(text: str) -> bytes:
+    """将文本渲染为图片（PNG 字节），与银趴插件保持一致的展示方式。"""
+    fontSize = 20
+    max_line_len = 100
+    max_lines = 200
+    lines = [line[:max_line_len] for line in text.split("\n")][:max_lines]
+    # 去掉 emoji，避免 CJK 字体下渲染成方块
+    lines = ["".join(ch for ch in line if not _is_emoji(ch)).rstrip() for line in lines]
+    font = _load_font(fontSize)
+    tmp = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    line_widths = [tmp.textlength(line, font=font) if font else len(line) * fontSize for line in lines]
+    width = int(max(line_widths, default=0)) + 24
+    width = max(width, 1)
+    height = len(lines) * (fontSize + 6) + 12
+    image = Image.new("RGB", (width, height), (255, 255, 255))
+    draw = ImageDraw.Draw(image)
+    y = 6
+    for line in lines:
+        draw.text((12, y), line, font=font, fill=(0, 0, 0))
+        y += fontSize + 6
+    buf = BytesIO()
+    image.save(buf, "PNG")
+    return buf.getvalue()
 
 
 class Achievement:
