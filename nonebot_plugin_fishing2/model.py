@@ -11,6 +11,7 @@ class FishingRecord(Model):
     fishes: Mapped[str] = mapped_column(TEXT)
     special_fishes: Mapped[str] = mapped_column(TEXT, default="{}")
     coin: Mapped[int] = mapped_column(default=0)
+    total_spent: Mapped[int] = mapped_column(default=0)
     achievements: Mapped[str] = mapped_column(TEXT, default="[]")
 
 

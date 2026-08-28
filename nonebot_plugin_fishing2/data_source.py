@@ -263,6 +263,8 @@ async def remove_tools(user_id, tools=None):
         if fishes_record:
             loads_fishes = json.loads(fishes_record.fishes)
             for tool_name in tools:
+                if tool_name == "永恒鱼竿":
+                    continue
                 loads_fishes[tool_name] -= 1
                 if loads_fishes[tool_name] == 0:
                     del loads_fishes[tool_name]
@@ -680,7 +682,10 @@ async def buy_fish(user_id, fish_name, quantity=1):
             user_update = (
                 update(FishingRecord)
                 .where(FishingRecord.user_id == user_id)
-                .values(fishes=dump_fishes)
+                .values(
+                    fishes=dump_fishes,
+                    total_spent=(fishes_record.total_spent or 0) + total_price,
+                )
             )
             await session.execute(user_update)
             await session.commit()
@@ -771,7 +776,7 @@ async def give(user_id, name_or_index, quantity=1, as_index=False, as_special=Fa
                     await add_user_balance(user_id, quantity, "admin_give_coin")
                 else:
                     await del_user_balance(user_id, abs(quantity), "admin_take_coin")
-                return f"使用滥权之力成功为 {user_id} {"增加" if quantity >= 0 else "减少"} {abs(quantity)} {fishing_coin_name} ヾ(≧▽≦*)o"
+                return f"使用滥权之力成功为 {user_id} {'增加' if quantity >= 0 else '减少'} {abs(quantity)} {fishing_coin_name} ヾ(≧▽≦*)o"
 
             loads_fishes = json.loads(record.fishes)
             spec_fishes = json.loads(record.special_fishes)
@@ -822,7 +827,7 @@ async def give(user_id, name_or_index, quantity=1, as_index=False, as_special=Fa
                 if len(fish_name) > 20
                 else fish_name
             )
-            return f"使用滥权之力成功为 {user_id} {"增加" if quantity >= 0 else "减少"} {abs(quantity)} 条 {fish_name} ヾ(≧▽≦*)o"
+            return f"使用滥权之力成功为 {user_id} {'增加' if quantity >= 0 else '减少'} {abs(quantity)} 条 {fish_name} ヾ(≧▽≦*)o"
         return "未查找到用户信息, 无法执行滥权操作 w(ﾟДﾟ)w"
 
 
@@ -907,6 +912,44 @@ async def get_pool(name_limit=30, page_limit=200):
         messages.append(MessageSegment.text(msg))
 
     return messages
+
+
+async def get_fishing_achievement_stats(user_id):
+    """暴露给银趴插件成就扫描的钓鱼统计（可选集成）。
+
+    返回字段：
+    - frequency: 累计钓鱼次数
+    - caught_all_catchable: 是否集齐所有可钓取的鱼
+    - has_special: 是否钓到过特殊鱼
+    - total_spent: 商店累计消费
+    - has_eternal_rod: 是否拥有永恒鱼竿
+    """
+    session = get_session()
+    async with session.begin():
+        record = await session.scalar(
+            select(FishingRecord).where(FishingRecord.user_id == user_id)
+        )
+        if not record:
+            return {
+                "frequency": 0,
+                "caught_all_catchable": False,
+                "has_special": False,
+                "total_spent": 0,
+                "has_eternal_rod": False,
+            }
+        frequency = record.frequency or 0
+        fishes = json.loads(record.fishes or "{}")
+        special_fishes = json.loads(record.special_fishes or "{}")
+        total_spent = record.total_spent or 0
+        can_catch_names = list(can_catch_fishes.keys())
+        caught_all_catchable = all(name in fishes for name in can_catch_names)
+        return {
+            "frequency": frequency,
+            "caught_all_catchable": caught_all_catchable,
+            "has_special": bool(special_fishes),
+            "total_spent": total_spent,
+            "has_eternal_rod": "永恒鱼竿" in fishes,
+        }
 
 
 async def get_stats(user_id):

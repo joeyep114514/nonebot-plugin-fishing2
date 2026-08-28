@@ -212,6 +212,27 @@ class Config(BaseModel):
             "can_catch": False,
             "can_buy": False,
             "can_sell": False
+        },
+        {
+            "type": "item",
+            "name": "永恒鱼竿",
+            "price": 1000000,
+            "amount": 1,
+            "props": [
+                {
+                    "type": "rare_fish",
+                    "value": 20
+                },
+                {
+                    "type": "no_fish",
+                    "value": -0.1
+                }
+            ],
+            "description": "传说中永不磨损的鱼竿，大幅提升稀有鱼概率，几乎不会空军。",
+            "can_catch": False,
+            "can_buy": True,
+            "buy_price": 1000000,
+            "can_sell": False
         }
     ]
     
