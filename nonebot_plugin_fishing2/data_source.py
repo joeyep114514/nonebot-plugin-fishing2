@@ -1065,14 +1065,17 @@ async def get_board():
 
 
 def get_shop() -> str:
-    lines = ["===== 钓鱼用具店 ====="]
+    lines = ["===== 钓鱼用具店 =====", ""]
 
     for fish in config_fishes:
         if fish.can_buy:
-            total_price = int(fish.buy_price * fish.amount)
-            lines.append(
-                f"商品名：{fish.name}\n单份数量：{fish.amount}\n单价：{fish.buy_price} {fishing_coin_name}\n"
-                f"单份总价：{total_price} {fishing_coin_name}\n描述：{fish.description}"
-            )
+            unit = f"{fish.buy_price} {fishing_coin_name}/份"
+            # 单份数量大于 1 时标注份数与总价，否则只标单价
+            if fish.amount and fish.amount > 1:
+                unit += f"（1份 = {fish.amount}个，{fish.buy_price * fish.amount} {fishing_coin_name}）"
+            lines.append(f"▶ {fish.name}：{unit}")
+            lines.append(f"  {fish.description}")
 
-    return "\n\n".join(lines)
+    lines.append("")
+    lines.append("购买：/buy <名称> [份数]（份数为1时可省略）")
+    return "\n".join(lines)
