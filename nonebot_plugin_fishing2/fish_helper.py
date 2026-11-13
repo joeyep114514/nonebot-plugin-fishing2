@@ -343,6 +343,8 @@ class Fish:
     only_with: Optional[str] = None
     catch_probability: Optional[float] = None
     daily_limit: Optional[str] = None
+    rare: bool = False
+    aliases: list[str] = []
 
     def __init__(self, fish_dict: dict):
         self.type = fish_dict["type"] if fish_dict.get("type") else "fish"
@@ -364,9 +366,16 @@ class Fish:
             else None
         )
         self.daily_limit = fish_dict.get("daily_limit") or None
+        self.aliases = fish_dict.get("aliases") or []
 
         self.sleep_time = fish_dict["sleep_time"] if fish_dict.get("sleep_time") else 60
         self.weight = fish_dict["weight"] if fish_dict.get("weight") else 0
+
+        if fish_dict.get("rare") is not None:
+            self.rare = bool(fish_dict["rare"])
+        else:
+            # 未显式标注时沿用权重分界线判断
+            self.rare = self.can_catch and self.weight < config.rare_fish_weight
 
         self.buy_price = (
             fish_dict["buy_price"]
@@ -455,7 +464,7 @@ can_sell_fishes = [fish.name for fish in config_fishes if fish.can_sell]
 
 def get_fish_by_name(fish_name: str) -> Fish | None:
     for fish in config_fishes:
-        if fish.name == fish_name:
+        if fish.name == fish_name or fish_name in fish.aliases:
             return fish
 
     return None

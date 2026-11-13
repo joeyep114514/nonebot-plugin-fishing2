@@ -42,12 +42,14 @@ class Config(BaseModel):
         {
             "type": "fish",
             "name": "小杂鱼~♡",
-            "price": 100,
+            "price": 200,
             "props": [],
             "description": "杂鱼，杂鱼~",
             "can_catch": True,
             "sleep_time": 10,
-            "weight": 100,
+            "weight": 800,
+            "rare": True,
+            "aliases": ["小杂鱼"], # 卖鱼时可以用别名
             "can_buy": False,
             "can_sell": True
         },
@@ -59,7 +61,8 @@ class Config(BaseModel):
             "description": "河里为什么会有烤鱼？",
             "can_catch": True,
             "sleep_time": 20,
-            "weight": 20,
+            "weight": 500,
+            "rare": True,
             "can_buy": False,
             "can_sell": True
         },
@@ -71,7 +74,8 @@ class Config(BaseModel):
             "description": "邪恶的冰之精灵，是个笨蛋。",
             "can_catch": True,
             "sleep_time": 60,
-            "weight": 20,
+            "weight": 500,
+            "rare": True,
             "can_buy": False,
             "can_sell": True
         },
@@ -83,19 +87,21 @@ class Config(BaseModel):
             "description": "非常能吃大米。",
             "can_catch": True,
             "sleep_time": 30,
-            "weight": 10,
+            "weight": 300,
+            "rare": True,
             "can_buy": False,
             "can_sell": True
         },
         {
             "type": "fish",
             "name": "帕秋莉",
-            "price": 8000,
+            "price": 5000,
             "props": [],
             "description": "Neet姬，非常难在图书馆外见到她。",
             "can_catch": True,
             "sleep_time": 120,
             "weight": 0,
+            "rare": True,
             "can_buy": False,
             "can_sell": True
         },
@@ -149,12 +155,13 @@ class Config(BaseModel):
                 {
                     "type": "normal_fish",
                     "value": -250
-                }      
+                }
             ],
             "description": "附魔的鱼竿，大幅减少钓上垃圾的概率。",
             "can_catch": True,
             "sleep_time": 30,
-            "weight": 40,
+            "weight": 400,
+            "rare": True,
             "can_buy": False,
             "can_sell": False
         },
@@ -221,7 +228,7 @@ class Config(BaseModel):
             "props": [
                 {
                     "type": "rare_fish",
-                    "value": 2220
+                    "value": 1834
                 },
                 {
                     "type": "no_fish",
@@ -237,7 +244,7 @@ class Config(BaseModel):
         {
             "type": "fish",
             "name": "普通鲑鱼",
-            "price": 1500,
+            "price": 300,
             "props": [],
             "description": "最普通的鲑鱼，也会逆流而上。",
             "can_catch": True,
@@ -265,7 +272,7 @@ class Config(BaseModel):
         {
             "type": "fish",
             "name": "真鲷",
-            "price": 1000,
+            "price": 800,
             "props": [],
             "description": "喜庆的红鱼，宴席上的常客。",
             "can_catch": True,
@@ -279,7 +286,7 @@ class Config(BaseModel):
         {
             "type": "fish",
             "name": "帝王鲑鱼",
-            "price": 2500,
+            "price": 1000,
             "props": [],
             "description": "鲑鱼中的帝王，体型惊人。",
             "can_catch": True,
@@ -293,7 +300,7 @@ class Config(BaseModel):
         {
             "type": "item",
             "name": "共享单车",
-            "price": 10000,
+            "price": 5000,
             "props": [],
             "description": "从河里捞出来的共享单车，全服每个 UTC 日只能捞到一辆。",
             "can_catch": True,
@@ -308,7 +315,7 @@ class Config(BaseModel):
         {
             "type": "item",
             "name": "舞萌DX",
-            "price": 100000,
+            "price": 50000,
             "props": [],
             "description": "从河里钓上来的街机，概率最低。",
             "can_catch": True,

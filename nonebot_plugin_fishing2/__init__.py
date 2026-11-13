@@ -28,6 +28,7 @@ from .data_source import (
     get_stats,
     get_backpack,
     sell_fish,
+    sell_all_fish,
     get_balance,
     free_fish,
     lottery,
@@ -65,6 +66,7 @@ __plugin_meta__ = PluginMetadata(
   ▷ 加参数可以使用鱼饵或鱼竿，同类物品同时只能使用一种 
 ▶ 出售 [-i] [-s] <物品或序号> [数量]：出售物品获得{fishing_coin_name}
   ▷ -i 按照序号卖鱼 -s 卖特殊鱼
+▶ 全部售出：把背包里所有可出售且有价值的普通/稀有鱼一次卖光
 ▶ 购买 <物品> [份数]：购买物品
 ▶ 放生 <鱼名>：给一条鱼取名并放生
   ▷ 不要放生奇怪名字的鱼
@@ -103,6 +105,12 @@ backpack = on_command("backpack", aliases={"背包", "钓鱼背包"}, force_whit
 shop = on_command("shop", aliases={"商店"}, force_whitespace=True, priority=5)
 buy = on_command("buy", aliases={"购买"}, force_whitespace=True, priority=5)
 sell = on_command("sell", aliases={"卖鱼", "出售", "售卖"}, force_whitespace=True, priority=5)
+sell_all_cmd = on_command(
+    "sellall",
+    aliases={"全部售出", "卖光", "一键卖鱼", "清空鱼"},
+    force_whitespace=True,
+    priority=5,
+)
 free_fish_cmd = on_command("free_fish", aliases={"放生", "钓鱼放生"}, force_whitespace=True, priority=5)
 lottery_cmd = on_command("lottery", aliases={"祈愿"}, force_whitespace=True, priority=5)
 achievement_cmd = on_command("achievement", aliases={"成就", "钓鱼成就"}, force_whitespace=True, priority=5)
@@ -162,10 +170,11 @@ async def _(
             MessageSegment.at(user_id)
             + " 在钓鱼活动中，空军指钓鱼者一无所获，没有钓到任何鱼，空手而归。"
         )
-    elif arg not in fish_list:
+    fish_info = get_fish_by_name(arg)
+    if fish_info is None:
         await fishing_lookup.finish(MessageSegment.at(user_id) + " 查无此鱼。")
 
-    messages = get_fish_by_name(arg).print_info()
+    messages = fish_info.print_info()
     await forward_send(bot, event, messages)
     return None
 
@@ -380,6 +389,14 @@ async def _(
         user_id, name_or_index, int(fish_quantity), as_index, as_special
     )
     await sell.finish(MessageSegment.at(user_id) + " " + result)
+
+
+@sell_all_cmd.handle()
+async def _(event: Union[GroupMessageEvent, PrivateMessageEvent]):
+    user_id = event.get_user_id()
+    await sell_all_cmd.finish(
+        MessageSegment.at(user_id) + " " + await sell_all_fish(user_id)
+    )
 
 
 @free_fish_cmd.handle()

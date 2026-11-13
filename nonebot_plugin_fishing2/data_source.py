@@ -391,12 +391,14 @@ def adjusted(adjusts=None):
             continue
         match adjust.type:
             case "normal_fish":
-                for key, weight in can_catch_fishes.items():
-                    if weight >= config.rare_fish_weight and key in adjusted_fishes:
+                for key in can_catch_fishes:
+                    fish = get_fish_by_name(key)
+                    if fish and not fish.rare and key in adjusted_fishes:
                         adjusted_fishes[key] += adjust.value
             case "rare_fish":
-                for key, weight in can_catch_fishes.items():
-                    if weight < config.rare_fish_weight and key in adjusted_fishes:
+                for key in can_catch_fishes:
+                    fish = get_fish_by_name(key)
+                    if fish and fish.rare and key in adjusted_fishes:
                         adjusted_fishes[key] += adjust.value
             case "fish":
                 adjusted_fishes[adjust.key] += adjust.value
@@ -704,6 +706,12 @@ async def sell_fish(user_id, name_or_index, quantity=1, as_index=False, as_speci
     if quantity <= 0:
         return "你在卖什么 w(ﾟДﾟ)w"
 
+    if not as_index and not as_special:
+        # 支持别名，例如 小杂鱼 -> 小杂鱼~♡
+        resolved_fish = get_fish_by_name(name_or_index)
+        if resolved_fish:
+            name_or_index = resolved_fish.name
+
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
@@ -783,6 +791,57 @@ async def sell_fish(user_id, name_or_index, quantity=1, as_index=False, as_speci
                 return "查无此鱼"
         else:
             return "还没钓鱼就想卖鱼?"
+
+
+async def sell_all_fish(user_id):
+    """卖掉背包里所有能卖且有价值的普通鱼，无法出售的留着。"""
+    session = get_session()
+    sold = []
+    skipped = []
+    total = 0
+    async with session.begin():
+        record = await session.scalar(
+            select(FishingRecord).where(FishingRecord.user_id == user_id)
+        )
+        if not record:
+            return "还没钓鱼就想卖鱼?"
+
+        loads_fishes = json.loads(record.fishes)
+        for fish_name in list(loads_fishes.keys()):
+            quantity = loads_fishes.get(fish_name, 0)
+            if quantity <= 0:
+                continue
+            fish = get_fish_by_name(fish_name)
+            if not fish or not fish.can_sell or fish.price <= 0:
+                skipped.append(fish_name)
+                continue
+            earned = fish.price * quantity
+            total += earned
+            sold.append((fish_name, quantity, earned))
+            del loads_fishes[fish_name]
+
+        if total <= 0:
+            return "背包里没有可以出售的鱼"
+
+        await session.execute(
+            update(FishingRecord)
+            .where(FishingRecord.user_id == user_id)
+            .values(fishes=json.dumps(loads_fishes))
+        )
+        await session.commit()
+
+    await add_user_balance(user_id, total, "sell_all_fish")
+
+    details = "\n".join(
+        f"{name}×{quantity}（+{earned}）" for name, quantity, earned in sold
+    )
+    message = (
+        f"已售出 {len(sold)} 种、共 {sum(quantity for _, quantity, _ in sold)} 条鱼，"
+        f"获得 {total} {fishing_coin_name}：\n{details}"
+    )
+    if skipped:
+        message += f"\n这些没法卖，给你留着了：{'、'.join(skipped)}"
+    return message
 
 
 async def buy_fish(user_id, fish_name, quantity=1):
