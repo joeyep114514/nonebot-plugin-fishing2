@@ -221,18 +221,116 @@ class Config(BaseModel):
             "props": [
                 {
                     "type": "rare_fish",
-                    "value": 20
+                    "value": 2220
                 },
                 {
                     "type": "no_fish",
                     "value": -0.1
                 }
             ],
-            "description": "传说中永不磨损的鱼竿，大幅提升稀有鱼概率，几乎不会空军。",
+            "description": "传说中永不磨损的鱼竿，钓到稀有鱼的概率约为 90%，且几乎不会空军。",
             "can_catch": False,
             "can_buy": True,
             "buy_price": 1000000,
             "can_sell": False
+        },
+        {
+            "type": "fish",
+            "name": "普通鲑鱼",
+            "price": 1500,
+            "props": [],
+            "description": "最普通的鲑鱼，也会逆流而上。",
+            "can_catch": True,
+            "sleep_time": 30,
+            "weight": 0,
+            "catch_probability": 0.02, # 仅永恒鱼竿，独立额外判定
+            "only_with": "永恒鱼竿",
+            "can_buy": False,
+            "can_sell": True
+        },
+        {
+            "type": "fish",
+            "name": "虹鳟",
+            "price": 500,
+            "props": [],
+            "description": "身侧有一条彩虹般的红线。",
+            "can_catch": True,
+            "sleep_time": 20,
+            "weight": 0,
+            "catch_probability": 0.01,
+            "only_with": "永恒鱼竿",
+            "can_buy": False,
+            "can_sell": True
+        },
+        {
+            "type": "fish",
+            "name": "真鲷",
+            "price": 1000,
+            "props": [],
+            "description": "喜庆的红鱼，宴席上的常客。",
+            "can_catch": True,
+            "sleep_time": 30,
+            "weight": 0,
+            "catch_probability": 0.01,
+            "only_with": "永恒鱼竿",
+            "can_buy": False,
+            "can_sell": True
+        },
+        {
+            "type": "fish",
+            "name": "帝王鲑鱼",
+            "price": 2500,
+            "props": [],
+            "description": "鲑鱼中的帝王，体型惊人。",
+            "can_catch": True,
+            "sleep_time": 60,
+            "weight": 0,
+            "catch_probability": 0.005,
+            "only_with": "永恒鱼竿",
+            "can_buy": False,
+            "can_sell": True
+        },
+        {
+            "type": "item",
+            "name": "共享单车",
+            "price": 10000,
+            "props": [],
+            "description": "从河里捞出来的共享单车，全服每个 UTC 日只能捞到一辆。",
+            "can_catch": True,
+            "sleep_time": 30,
+            "weight": 0,
+            "catch_probability": 0.01,
+            "only_with": "永恒鱼竿",
+            "daily_limit": "utc", # 全服每个 UTC 日限一条
+            "can_buy": False,
+            "can_sell": True
+        },
+        {
+            "type": "item",
+            "name": "舞萌DX",
+            "price": 100000,
+            "props": [],
+            "description": "从河里钓上来的街机，概率最低。",
+            "can_catch": True,
+            "sleep_time": 90,
+            "weight": 0,
+            "catch_probability": 0.0001,
+            "only_with": "永恒鱼竿",
+            "can_buy": False,
+            "can_sell": True
+        },
+        {
+            "type": "fish",
+            "name": "盘锦河蟹",
+            "price": 600,
+            "props": [],
+            "description": "不管用什么鱼竿都有可能钓上来的河蟹。",
+            "can_catch": True,
+            "sleep_time": 20,
+            "weight": 0,
+            "catch_probability": 0.0001, # 任意鱼竿，0.01%
+            "can_buy": False,
+            "can_sell": True
         }
     ]
     
@@ -290,6 +388,12 @@ class Config(BaseModel):
             "name": "为啥能钓上鱼竿？",
             "data": "附魔鱼竿",
             "description": "钓上附魔鱼竿"
+        },
+        {
+            "type": "fish_type",
+            "name": "钓蟹钓蟹，我喜欢钓蟹",
+            "data": "盘锦河蟹",
+            "description": "钓到盘锦河蟹。"
         }
     ]
 
@@ -310,8 +414,14 @@ class Config(BaseModel):
     special_fish_probability: float = 0.01 # 钓上特殊鱼的概率，注意这个判定在空军判定之后
 
     no_fish_probability: float = 0.1 # 空军的概率
-    
-    rare_fish_weight: int = 500 # 稀有鱼权重分界线，影响 rare_fish 属性与 normal_fish 属性的区分
+
+    small_fish_chain_probability: float = 0.006 # 任意鱼竿钓上一串小杂鱼的概率（0.6%）
+
+    small_fish_chain_name: str = "小杂鱼~♡" # 一串小杂鱼里的鱼
+
+    small_fish_chain_amount: int = 10 # 一串小杂鱼的数量
+
+    rare_fish_weight: int = 500 # 稀有鱼权重分界线，影响 rare_fish 属性与 normal_fish 属性的区分（尚方宝剑权重 500，不计入稀有鱼）
     
     buy_rate: float = 2.0 # 在不指定 buy_price 时，购买价格/基准价格比，应大于 1
     

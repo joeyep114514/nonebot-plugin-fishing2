@@ -4,6 +4,8 @@ import random
 import time
 import json
 
+from datetime import datetime, timezone
+from pathlib import Path
 from collections.abc import Hashable
 from sqlalchemy import select, update, delete
 from sqlalchemy.sql.expression import func
@@ -211,6 +213,91 @@ async def can_fishing(user_id):
         return True if not record else record.time < time_now
 
 
+# ---- 独立概率鱼 & UTC 每日全服限量的状态文件 ----
+
+_daily_state_file = None
+
+
+def _get_daily_state_file() -> Path:
+    global _daily_state_file
+    if _daily_state_file is None:
+        try:
+            from nonebot_plugin_localstore import get_plugin_data_file
+
+            _daily_state_file = get_plugin_data_file("daily_limited_fishes.json")
+        except Exception:
+            data_dir = Path.cwd() / "data" / "nonebot_plugin_fishing2"
+            data_dir.mkdir(parents=True, exist_ok=True)
+            _daily_state_file = data_dir / "daily_limited_fishes.json"
+    return _daily_state_file
+
+
+def _utc_today() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _load_daily_state() -> dict:
+    path = _get_daily_state_file()
+    try:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        pass
+    return {}
+
+
+def _is_daily_limit_available(fish_name: str) -> bool:
+    return _load_daily_state().get(fish_name) != _utc_today()
+
+
+def _claim_daily_limit(fish_name: str) -> bool:
+    """抢占某个鱼当天的全服名额，成功返回 True。"""
+    today = _utc_today()
+    path = _get_daily_state_file()
+    data = _load_daily_state()
+    if data.get(fish_name) == today:
+        return False
+    data[fish_name] = today
+    try:
+        path.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    except OSError:
+        return False
+    return True
+
+
+def roll_event_fish(tools=None):
+    """独立概率鱼判定：永恒鱼竿 only 鱼和任意鱼竿的河蟹都走这里。
+
+    各鱼的概率相互独立，一次抛竿最多命中一条；概率总和可以叠加在
+    常规稀有鱼概率之上，因此总好鱼概率可能超过 90%。
+    """
+    candidates = []
+    for fish in event_fishes:
+        if fish.only_with and fish.only_with not in (tools or []):
+            continue
+        if fish.daily_limit == "utc" and not _is_daily_limit_available(fish.name):
+            continue
+        candidates.append(fish)
+
+    if not candidates:
+        return None
+
+    total = sum(fish.catch_probability for fish in candidates)
+    # 概率总和超过 1 时按比例归一，保证剩余部分仍有机会
+    if total > 1:
+        weights = [fish.catch_probability / total for fish in candidates]
+        total = 1.0
+    else:
+        weights = [fish.catch_probability for fish in candidates]
+
+    picked = random.choices(candidates + [None], weights=weights + [1 - total])[0]
+    if picked is None:
+        return None
+    if picked.daily_limit == "utc" and not _claim_daily_limit(picked.name):
+        return None
+    return picked
+
+
 async def can_catch_special_fish(probability_add):
     session = get_session()
     async with session.begin():
@@ -346,6 +433,18 @@ async def get_fish(user_id, tools=None):
         await asyncio.sleep(random.randint(10, 20))
         return "QAQ你空军了，什么都没钓到"
 
+    # 任意鱼竿：0.6% 概率钓上一串小杂鱼
+    if random.random() < config.small_fish_chain_probability:
+        chain_fish = get_fish_by_name(config.small_fish_chain_name)
+        await asyncio.sleep(chain_fish.sleep_time)
+        await save_fish(
+            user_id, config.small_fish_chain_name, amount=config.small_fish_chain_amount
+        )
+        return (
+            f"你钓上来一串{config.small_fish_chain_name}"
+            f"（共 {config.small_fish_chain_amount} 条），你把它们收进了背包里"
+        )
+
     if await can_catch_special_fish(sp_add):
         special_fish_name = await random_get_a_special_fish()
         await asyncio.sleep(random.randint(10, 20))
@@ -353,11 +452,24 @@ async def get_fish(user_id, tools=None):
         result = f"你钓到了别人放生的 {special_fish_name}"
         return result
 
+    # 独立概率鱼：永恒鱼竿 only 鱼、任意鱼竿的盘锦河蟹。
+    # 它们是在常规稀有鱼之上额外判定的，命中会与本次渔获一起进背包，
+    # 所以总好鱼概率可以超过 90%。
+    event_fish = roll_event_fish(tools)
+
     fish = choice(adjusts)
     sleep_time = get_fish_by_name(fish).sleep_time
     result = f"钓到了一条{fish}, 你把它收进了背包里"
     await asyncio.sleep(sleep_time)
     await save_fish(user_id, fish)
+    if event_fish:
+        await save_fish(user_id, event_fish.name)
+        daily_note = (
+            "（今日全服唯一的一辆，被你捞到了）"
+            if event_fish.daily_limit == "utc"
+            else ""
+        )
+        result += f"\n同时还钓到了{event_fish.name}{daily_note}，也收进了背包里"
     return result
 
 
@@ -386,6 +498,24 @@ def predict(tools=None):
     result += f'''概率列表: [{', '.join([str(round(w * 100, 2)) + "%" for w in probabilities])}]\n'''
     result += f"特殊鱼概率：{round(sp_t * (1 - no_t), 6)}\n"
     result += f"空军概率：{round(no_t, 6)}\n"
+    result += f"一串小杂鱼概率：{config.small_fish_chain_probability * 100:g}%（任意鱼竿）\n"
+
+    available_event_fishes = [
+        fish
+        for fish in event_fishes
+        if not fish.only_with or fish.only_with in (tools or [])
+    ]
+    if available_event_fishes:
+        event_total = sum(fish.catch_probability for fish in available_event_fishes)
+        result += f"独立概率鱼（额外判定，可与本次渔获叠加，合计 {event_total * 100:.2f}%）：\n"
+        for fish in available_event_fishes:
+            result += f"  ▷ {fish.name}：{fish.catch_probability * 100:g}%"
+            if fish.only_with:
+                result += f"（仅限{fish.only_with}）"
+            if fish.daily_limit == "utc":
+                result += "（UTC 每日全服限 1 条）"
+            result += "\n"
+
 
     expected_value = expected_value * (1 - no_t)
     result += f"无特殊鱼时期望为：{expected_value:.3f}\n"
@@ -474,12 +604,13 @@ async def save_achievement(user_id, achievement_name):
         await session.commit()
 
 
-async def save_fish(user_id, fish_name):
+async def save_fish(user_id, fish_name, amount=None):
     time_now = int(time.time())
     fishing_cooldown = random.randint(
         config.fishing_cooldown_time_min, config.fishing_cooldown_time_max
     )
-    amount = get_fish_by_name(fish_name).amount
+    if amount is None:
+        amount = get_fish_by_name(fish_name).amount
     session = get_session()
     async with session.begin():
         select_user = select(FishingRecord).where(FishingRecord.user_id == user_id)
